@@ -562,7 +562,7 @@ export default function App() {
     try {
       // bolls.life 검색 API 활용
       const encodedQuery = encodeURIComponent(searchQuery.trim());
-      const res = await fetch(`https://bolls.life/search/KRV/?search=${encodedQuery}&limit=100`);
+      const res = await fetch(`/api/search?query=${encodedQuery}`);
       if (!res.ok) throw new Error("검색 요청에 오류가 발생했습니다.");
 
       const data = await res.json();
