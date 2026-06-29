@@ -3,8 +3,14 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(req: NextRequest) {
   const query = req.nextUrl.searchParams.get('query') ?? '';
+  
   if (!query.trim()) {
     return NextResponse.json({ error: '검색어를 입력하세요.' }, { status: 400 });
+  }
+
+  // bolls.life API는 3글자 이상만 검색 가능
+  if (query.trim().length <= 2) {
+    return NextResponse.json({ error: '검색어는 3글자 이상 입력해주세요.' }, { status: 400 });
   }
 
   try {

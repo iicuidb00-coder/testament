@@ -552,8 +552,14 @@ export default function App() {
 
   // 성경 통합 검색 처리
   const handleSearch = async (e: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!searchQuery.trim()) return;
+  if (e) e.preventDefault();
+  if (!searchQuery.trim()) return;
+
+  // 2글자 이하 사전 차단
+  if (searchQuery.trim().length <= 2) {
+    setSearchSuccessMessage("검색어는 3글자 이상 입력해주세요. (예: 하나님, 사랑하라)");
+    return;
+  }
 
     setSearchLoading(true);
     setSearchResults([]);
