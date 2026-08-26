@@ -235,16 +235,23 @@ export default function App() {
 
   // ── 타자연습 상태 ──────────────────────────────────────
   const [typingMode, setTypingMode] = useState<boolean>(false);
+  // "all": 전체 장 / "selected": 선택 구절만
+  const [typingScope, setTypingScope] = useState<"all" | "selected">("all");
+  const [typingQueue, setTypingQueue] = useState<VerseData[]>([]);   // 연습할 구절 목록
   const [typingIndex, setTypingIndex] = useState<number>(0);
   const [typingInput, setTypingInput] = useState<string>("");
   const [typingStartTime, setTypingStartTime] = useState<number | null>(null);
+  const [typingSessionStart, setTypingSessionStart] = useState<number | null>(null);
+  const [typingShowResult, setTypingShowResult] = useState<boolean>(false); // 결과 화면
   const [typingStats, setTypingStats] = useState<{
     wpm: number;
     accuracy: number;
     errors: number;
     completed: number;
     totalErrors: number;
-  }>({ wpm: 0, accuracy: 100, errors: 0, completed: 0, totalErrors: 0 });
+    totalChars: number;      // 총 입력 글자수
+    totalTime: number;       // 총 소요 시간(초)
+  }>({ wpm: 0, accuracy: 100, errors: 0, completed: 0, totalErrors: 0, totalChars: 0, totalTime: 0 });
   // ────────────────────────────────────────────────────────
 
   const activeTheme = THEMES[theme];
@@ -353,13 +360,22 @@ export default function App() {
   }, [currentBook, currentChapter, parallelVersion]);
 
   // ── 타자연습 핸들러 ─────────────────────────────────────
+  // 등급 계산 헬퍼
+  const calcGrade = (accuracy: number, wpm: number): string => {
+    const score = accuracy * 0.7 + Math.min(wpm / 2, 30);
+    if (score >= 95) return "S";
+    if (score >= 85) return "A";
+    if (score >= 70) return "B";
+    if (score >= 55) return "C";
+    return "D";
+  };
+
   const handleTypingInput = (value: string) => {
-    const target = verses[typingIndex] ? stripHtml(verses[typingIndex].text) : "";
+    const target = typingQueue[typingIndex] ? stripHtml(typingQueue[typingIndex].text) : "";
     if (!typingStartTime && value.length === 1) {
       setTypingStartTime(Date.now());
+      if (!typingSessionStart) setTypingSessionStart(Date.now());
     }
-
-    // 실시간 통계 계산
     let errors = 0;
     for (let i = 0; i < value.length; i++) {
       if (value[i] !== target[i]) errors++;
@@ -367,13 +383,12 @@ export default function App() {
     const elapsed = typingStartTime ? (Date.now() - typingStartTime) / 1000 / 60 : 0;
     const wpm = elapsed > 0 ? Math.round((value.length / 5) / elapsed) : 0;
     const accuracy = value.length > 0 ? Math.round(((value.length - errors) / value.length) * 100) : 100;
-
     setTypingInput(value);
     setTypingStats(prev => ({ ...prev, wpm, accuracy, errors }));
   };
 
   const handleTypingEnter = () => {
-    const target = verses[typingIndex] ? stripHtml(verses[typingIndex].text) : "";
+    const target = typingQueue[typingIndex] ? stripHtml(typingQueue[typingIndex].text) : "";
     let errors = 0;
     for (let i = 0; i < Math.max(typingInput.length, target.length); i++) {
       if (typingInput[i] !== target[i]) errors++;
@@ -381,35 +396,77 @@ export default function App() {
     const elapsed = typingStartTime ? (Date.now() - typingStartTime) / 1000 / 60 : 0;
     const wpm = elapsed > 0 ? Math.round((typingInput.length / 5) / elapsed) : 0;
     const accuracy = target.length > 0 ? Math.round(((target.length - errors) / target.length) * 100) : 100;
+    const newCompleted = typingStats.completed + 1;
+    const newTotalErrors = typingStats.totalErrors + errors;
+    const newTotalChars = typingStats.totalChars + typingInput.length;
 
-    setTypingStats(prev => ({
-      wpm,
-      accuracy,
-      errors,
-      completed: prev.completed + 1,
-      totalErrors: prev.totalErrors + errors,
-    }));
-
-    if (typingIndex < verses.length - 1) {
+    if (typingIndex < typingQueue.length - 1) {
+      setTypingStats(prev => ({
+        wpm, accuracy, errors,
+        completed: newCompleted,
+        totalErrors: newTotalErrors,
+        totalChars: newTotalChars,
+        totalTime: prev.totalTime,
+      }));
       setTypingIndex(typingIndex + 1);
       setTypingInput("");
       setTypingStartTime(null);
     } else {
-      showToast("🎉 이 장의 모든 구절 타자연습 완료!");
-      setTypingIndex(0);
+      // 한 바퀴 완료 → 결과 화면
+      const totalTime = typingSessionStart ? Math.round((Date.now() - typingSessionStart) / 1000) : 0;
+      const totalChars = newTotalChars;
+      const totalMin = totalTime / 60;
+      const finalWpm = totalMin > 0 ? Math.round((totalChars / 5) / totalMin) : 0;
+      const finalAccuracy = totalChars > 0
+        ? Math.round(((totalChars - newTotalErrors) / totalChars) * 100)
+        : 100;
+      setTypingStats({
+        wpm: finalWpm,
+        accuracy: finalAccuracy,
+        errors,
+        completed: newCompleted,
+        totalErrors: newTotalErrors,
+        totalChars,
+        totalTime,
+      });
+      setTypingShowResult(true);
       setTypingInput("");
       setTypingStartTime(null);
     }
   };
 
+  const handleStartTyping = (scope: "all" | "selected") => {
+    const queue = scope === "selected" && selectedVerses.length > 0
+      ? verses.filter(v => selectedVerses.includes(v.verse))
+      : verses;
+    if (queue.length === 0) { showToast("연습할 구절이 없습니다."); return; }
+    setTypingScope(scope);
+    setTypingQueue(queue);
+    setTypingIndex(0);
+    setTypingInput("");
+    setTypingStartTime(null);
+    setTypingSessionStart(null);
+    setTypingShowResult(false);
+    setTypingStats({ wpm: 0, accuracy: 100, errors: 0, completed: 0, totalErrors: 0, totalChars: 0, totalTime: 0 });
+    setTypingMode(true);
+  };
+
+  const handleRestartTyping = () => {
+    setTypingIndex(0);
+    setTypingInput("");
+    setTypingStartTime(null);
+    setTypingSessionStart(null);
+    setTypingShowResult(false);
+    setTypingStats({ wpm: 0, accuracy: 100, errors: 0, completed: 0, totalErrors: 0, totalChars: 0, totalTime: 0 });
+  };
+
   const handleToggleTypingMode = () => {
     setTypingMode(prev => {
-      if (!prev) {
-        // 켤 때 초기화
-        setTypingIndex(0);
+      if (prev) {
+        setTypingShowResult(false);
         setTypingInput("");
         setTypingStartTime(null);
-        setTypingStats({ wpm: 0, accuracy: 100, errors: 0, completed: 0, totalErrors: 0 });
+        setTypingSessionStart(null);
       }
       return !prev;
     });
@@ -1199,18 +1256,39 @@ export default function App() {
                       </button>
                     </div>
 
-                    {/* 타자연습 ON/OFF 버튼 */}
-                    <button
-                      onClick={handleToggleTypingMode}
-                      className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${
-                        typingMode
-                          ? "bg-emerald-500 text-white border-emerald-600 shadow-md"
-                          : activeTheme.buttonInactive
-                      }`}
-                      title="타자연습 모드 켜기/끄기"
-                    >
-                      ⌨️ {typingMode ? "타자연습 ON" : "타자연습"}
-                    </button>
+                    {/* 타자연습 버튼 그룹 */}
+                    {!typingMode ? (
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => handleStartTyping("all")}
+                          className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${activeTheme.buttonInactive}`}
+                          title="이 장 전체 구절로 타자연습"
+                        >
+                          ⌨️ 전체 타자
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (selectedVerses.length === 0) { showToast("먼저 구절을 선택해주세요."); return; }
+                            handleStartTyping("selected");
+                          }}
+                          className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${
+                            selectedVerses.length > 0
+                              ? "bg-indigo-500 text-white border-indigo-600 shadow-sm"
+                              : activeTheme.buttonInactive
+                          }`}
+                          title="선택한 구절만 타자연습"
+                        >
+                          ⌨️ 선택 타자{selectedVerses.length > 0 ? ` (${selectedVerses.length})` : ""}
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={handleToggleTypingMode}
+                        className="px-3 py-1.5 rounded-lg border text-xs font-bold bg-emerald-500 text-white border-emerald-600 shadow-md"
+                      >
+                        ⌨️ 타자 종료
+                      </button>
+                    )}
 
                   </div>
                 </div>
@@ -1319,105 +1397,197 @@ export default function App() {
                   )}
 
                   {/* ── 타자연습 패널 ─────────────────────────── */}
-                  {typingMode && !loading && verses.length > 0 && (
-                    <div className={`mt-6 p-5 rounded-2xl border-2 border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30 space-y-4`}>
-                      
-                      {/* 헤더 */}
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <h3 className="font-black text-emerald-700 dark:text-emerald-400 flex items-center gap-2">
-                            ⌨️ 타자연습
-                            <span className="text-xs font-semibold bg-emerald-200 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-300 px-2 py-0.5 rounded-full">
-                              {typingIndex + 1} / {verses.length}절
-                            </span>
-                          </h3>
-                          <p className="text-xs text-emerald-600 dark:text-emerald-500 mt-0.5">
-                            아래 말씀을 그대로 입력하고 Enter를 눌러 다음 구절로 이동하세요.
-                          </p>
-                        </div>
-                        {/* 실시간 통계 뱃지 */}
-                        <div className="flex gap-2 text-xs font-bold">
-                          <span className="bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 px-2 py-1 rounded-lg">
-                            ⚡ {typingStats.wpm} WPM
-                          </span>
-                          <span className={`px-2 py-1 rounded-lg ${
-                            typingStats.accuracy >= 95
-                              ? "bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300"
-                              : typingStats.accuracy >= 80
-                              ? "bg-yellow-100 dark:bg-yellow-900/50 text-yellow-700 dark:text-yellow-300"
-                              : "bg-rose-100 dark:bg-rose-900/50 text-rose-700 dark:text-rose-300"
+                  {typingMode && !loading && typingQueue.length > 0 && (
+                    <div className="mt-6 rounded-2xl border-2 border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30 overflow-hidden">
+
+                      {/* ── 결과 화면 ── */}
+                      {typingShowResult ? (
+                        <div className="p-6 space-y-5">
+                          {/* 결과 헤더 */}
+                          <div className="text-center space-y-1">
+                            <p className="text-xs font-bold text-emerald-600 uppercase tracking-widest">타자연습 완료!</p>
+                            <div className={`text-7xl font-black ${
+                              calcGrade(typingStats.accuracy, typingStats.wpm) === "S" ? "text-yellow-500" :
+                              calcGrade(typingStats.accuracy, typingStats.wpm) === "A" ? "text-emerald-500" :
+                              calcGrade(typingStats.accuracy, typingStats.wpm) === "B" ? "text-blue-500" :
+                              calcGrade(typingStats.accuracy, typingStats.wpm) === "C" ? "text-orange-500" : "text-rose-500"
+                            }`}>
+                              {calcGrade(typingStats.accuracy, typingStats.wpm)}
+                            </div>
+                            <p className="text-sm text-slate-500 dark:text-slate-400">
+                              {typingScope === "selected" ? `선택 구절 ${typingQueue.length}개` : `${currentBook.name} ${currentChapter}장 전체`} 완주
+                            </p>
+                          </div>
+
+                          {/* 상세 스탯 그리드 */}
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                            <div className="bg-white dark:bg-zinc-900 rounded-xl p-3 text-center border">
+                              <p className="text-2xl font-black text-blue-500">{typingStats.wpm}</p>
+                              <p className="text-xs text-slate-500 font-semibold mt-0.5">WPM</p>
+                              <p className="text-[10px] text-slate-400">분당 타수</p>
+                            </div>
+                            <div className="bg-white dark:bg-zinc-900 rounded-xl p-3 text-center border">
+                              <p className={`text-2xl font-black ${
+                                typingStats.accuracy >= 95 ? "text-emerald-500" :
+                                typingStats.accuracy >= 80 ? "text-yellow-500" : "text-rose-500"
+                              }`}>{typingStats.accuracy}%</p>
+                              <p className="text-xs text-slate-500 font-semibold mt-0.5">정확도</p>
+                              <p className="text-[10px] text-slate-400">Accuracy</p>
+                            </div>
+                            <div className="bg-white dark:bg-zinc-900 rounded-xl p-3 text-center border">
+                              <p className="text-2xl font-black text-rose-500">{typingStats.totalErrors}</p>
+                              <p className="text-xs text-slate-500 font-semibold mt-0.5">총 오류</p>
+                              <p className="text-[10px] text-slate-400">Errors</p>
+                            </div>
+                            <div className="bg-white dark:bg-zinc-900 rounded-xl p-3 text-center border">
+                              <p className="text-2xl font-black text-slate-600 dark:text-slate-300">
+                                {typingStats.totalTime >= 60
+                                  ? `${Math.floor(typingStats.totalTime / 60)}분${typingStats.totalTime % 60}초`
+                                  : `${typingStats.totalTime}초`}
+                              </p>
+                              <p className="text-xs text-slate-500 font-semibold mt-0.5">소요 시간</p>
+                              <p className="text-[10px] text-slate-400">Time</p>
+                            </div>
+                          </div>
+
+                          {/* 등급 코멘트 */}
+                          <div className={`p-3 rounded-xl text-sm font-semibold text-center ${
+                            calcGrade(typingStats.accuracy, typingStats.wpm) === "S" ? "bg-yellow-50 dark:bg-yellow-950/30 text-yellow-700 dark:text-yellow-400" :
+                            calcGrade(typingStats.accuracy, typingStats.wpm) === "A" ? "bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400" :
+                            calcGrade(typingStats.accuracy, typingStats.wpm) === "B" ? "bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-400" :
+                            calcGrade(typingStats.accuracy, typingStats.wpm) === "C" ? "bg-orange-50 dark:bg-orange-950/30 text-orange-700 dark:text-orange-400" :
+                            "bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-400"
                           }`}>
-                            🎯 {typingStats.accuracy}%
-                          </span>
-                          <span className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 px-2 py-1 rounded-lg">
-                            ✅ {typingStats.completed}절 완료
-                          </span>
-                          {typingStats.totalErrors > 0 && (
-                            <span className="bg-rose-100 dark:bg-rose-900/50 text-rose-600 dark:text-rose-300 px-2 py-1 rounded-lg">
-                              ❌ 누적 {typingStats.totalErrors}오류
+                            {calcGrade(typingStats.accuracy, typingStats.wpm) === "S" && "🏆 완벽합니다! 하나님의 말씀을 정확하게 새겼습니다."}
+                            {calcGrade(typingStats.accuracy, typingStats.wpm) === "A" && "🎉 훌륭해요! 말씀을 거의 완벽하게 입력했습니다."}
+                            {calcGrade(typingStats.accuracy, typingStats.wpm) === "B" && "👍 좋아요! 조금 더 연습하면 더 좋아질 거예요."}
+                            {calcGrade(typingStats.accuracy, typingStats.wpm) === "C" && "📖 말씀을 천천히 정확하게 읽으며 다시 도전해보세요."}
+                            {calcGrade(typingStats.accuracy, typingStats.wpm) === "D" && "🙏 괜찮아요! 말씀을 읽으며 차근차근 다시 해봐요."}
+                          </div>
+
+                          {/* 다시하기 / 종료 */}
+                          <div className="flex gap-2 justify-center">
+                            <button
+                              onClick={handleRestartTyping}
+                              className="px-6 py-2.5 rounded-xl bg-emerald-500 text-white font-bold text-sm hover:bg-emerald-600 transition-all"
+                            >
+                              🔄 다시 연습
+                            </button>
+                            <button
+                              onClick={handleToggleTypingMode}
+                              className="px-6 py-2.5 rounded-xl border font-bold text-sm hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
+                            >
+                              ✕ 종료
+                            </button>
+                          </div>
+                        </div>
+
+                      ) : (
+                        /* ── 연습 화면 ── */
+                        <div className="p-5 space-y-4">
+                          {/* 헤더 */}
+                          <div className="flex items-center justify-between flex-wrap gap-2">
+                            <div>
+                              <h3 className="font-black text-emerald-700 dark:text-emerald-400 flex items-center gap-2">
+                                ⌨️ 타자연습
+                                <span className="text-xs font-semibold bg-emerald-200 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-300 px-2 py-0.5 rounded-full">
+                                  {typingIndex + 1} / {typingQueue.length}절
+                                </span>
+                                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                                  typingScope === "selected"
+                                    ? "bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300"
+                                    : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300"
+                                }`}>
+                                  {typingScope === "selected" ? "선택 구절" : "전체 장"}
+                                </span>
+                              </h3>
+                              <p className="text-xs text-emerald-600 dark:text-emerald-500 mt-0.5">
+                                말씀을 그대로 입력하고 Enter로 다음 구절 이동
+                              </p>
+                            </div>
+                            {/* 실시간 통계 뱃지 */}
+                            <div className="flex flex-wrap gap-2 text-xs font-bold">
+                              <span className="bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 px-2 py-1 rounded-lg">
+                                ⚡ {typingStats.wpm} WPM
+                              </span>
+                              <span className={`px-2 py-1 rounded-lg ${
+                                typingStats.accuracy >= 95 ? "bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300" :
+                                typingStats.accuracy >= 80 ? "bg-yellow-100 dark:bg-yellow-900/50 text-yellow-700 dark:text-yellow-300" :
+                                "bg-rose-100 dark:bg-rose-900/50 text-rose-700 dark:text-rose-300"
+                              }`}>
+                                🎯 {typingStats.accuracy}%
+                              </span>
+                              <span className="bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 px-2 py-1 rounded-lg">
+                                ✅ {typingStats.completed}절
+                              </span>
+                              {typingStats.totalErrors > 0 && (
+                                <span className="bg-rose-100 dark:bg-rose-900/50 text-rose-600 dark:text-rose-300 px-2 py-1 rounded-lg">
+                                  ❌ {typingStats.totalErrors}오류
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* 진행 바 */}
+                          <div className="w-full h-1.5 bg-emerald-100 dark:bg-emerald-900/40 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-emerald-500 rounded-full transition-all duration-300"
+                              style={{ width: `${((typingIndex) / typingQueue.length) * 100}%` }}
+                            />
+                          </div>
+
+                          {/* 현재 구절 표시 (글자별 색상 피드백) */}
+                          <div className="p-4 rounded-xl bg-white dark:bg-zinc-900 border text-base font-medium leading-relaxed tracking-wide select-none">
+                            <span className="text-xs font-bold text-emerald-600 mr-2">
+                              {typingQueue[typingIndex]?.verse}절
                             </span>
+                            {(() => {
+                              const target = typingQueue[typingIndex] ? stripHtml(typingQueue[typingIndex].text) : "";
+                              return target.split("").map((char, i) => {
+                                let cls = "text-slate-400 dark:text-slate-500";
+                                if (i < typingInput.length) {
+                                  cls = typingInput[i] === char
+                                    ? "text-emerald-600 dark:text-emerald-400"
+                                    : "text-rose-500 bg-rose-100 dark:bg-rose-900/40 rounded";
+                                } else if (i === typingInput.length) {
+                                  cls = "text-slate-400 dark:text-slate-500 underline underline-offset-4";
+                                }
+                                return <span key={i} className={cls}>{char}</span>;
+                              });
+                            })()}
+                          </div>
+
+                          {/* 입력창 */}
+                          <div className="relative">
+                            <input
+                              type="text"
+                              value={typingInput}
+                              onChange={(e) => handleTypingInput(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") { e.preventDefault(); handleTypingEnter(); }
+                              }}
+                              placeholder="여기에 위의 말씀을 입력하세요..."
+                              autoFocus
+                              className={`w-full px-4 py-3 pr-40 rounded-xl border-2 text-base outline-none transition-all font-medium ${
+                                typingInput.length === 0
+                                  ? "border-emerald-300 dark:border-emerald-700 bg-white dark:bg-zinc-900"
+                                  : typingStats.errors === 0
+                                  ? "border-emerald-400 dark:border-emerald-500 bg-white dark:bg-zinc-900"
+                                  : "border-rose-400 dark:border-rose-600 bg-rose-50 dark:bg-rose-950/20"
+                              }`}
+                            />
+                            <div className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 font-semibold whitespace-nowrap">
+                              {typingInput.length} / {typingQueue[typingIndex] ? stripHtml(typingQueue[typingIndex].text).length : 0}자
+                            </div>
+                          </div>
+
+                          {typingStats.errors > 0 && (
+                            <p className="text-xs text-rose-500 font-semibold">
+                              ⚠️ 현재 {typingStats.errors}글자 틀렸습니다.
+                            </p>
                           )}
                         </div>
-                      </div>
-
-                      {/* 현재 구절 표시 (글자별 색상 피드백) */}
-                      <div className={`p-4 rounded-xl bg-white dark:bg-zinc-900 border text-base font-medium leading-relaxed tracking-wide select-none`}>
-                        <span className="text-xs font-bold text-emerald-600 mr-2">
-                          {verses[typingIndex]?.verse}절
-                        </span>
-                        {(() => {
-                          const target = verses[typingIndex] ? stripHtml(verses[typingIndex].text) : "";
-                          return target.split("").map((char, i) => {
-                            let color = "text-slate-400 dark:text-slate-500"; // 아직 안 입력
-                            if (i < typingInput.length) {
-                              color = typingInput[i] === char
-                                ? "text-emerald-600 dark:text-emerald-400"  // 정확
-                                : "text-rose-500 bg-rose-100 dark:bg-rose-900/40 rounded"; // 틀림
-                            }
-                            return (
-                              <span key={i} className={color}>
-                                {char}
-                              </span>
-                            );
-                          });
-                        })()}
-                      </div>
-
-                      {/* 입력창 */}
-                      <div className="relative">
-                        <input
-                          type="text"
-                          value={typingInput}
-                          onChange={(e) => handleTypingInput(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              handleTypingEnter();
-                            }
-                          }}
-                          placeholder="여기에 위의 말씀을 입력하세요..."
-                          autoFocus
-                          className={`w-full px-4 py-3 rounded-xl border-2 text-base outline-none transition-all font-medium
-                            ${typingInput.length === 0
-                              ? "border-emerald-300 dark:border-emerald-700 bg-white dark:bg-zinc-900"
-                              : typingStats.errors === 0
-                              ? "border-emerald-400 dark:border-emerald-500 bg-white dark:bg-zinc-900"
-                              : "border-rose-400 dark:border-rose-600 bg-rose-50 dark:bg-rose-950/20"
-                            }
-                          `}
-                        />
-                        <div className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 font-semibold">
-                          {typingInput.length} / {verses[typingIndex] ? stripHtml(verses[typingIndex].text).length : 0}자 · Enter로 다음 절
-                        </div>
-                      </div>
-
-                      {/* 오류 글자 강조 표시 */}
-                      {typingStats.errors > 0 && (
-                        <p className="text-xs text-rose-500 font-semibold flex items-center gap-1">
-                          ⚠️ 현재 {typingStats.errors}글자 틀렸습니다. 정확하게 입력해보세요!
-                        </p>
                       )}
-
                     </div>
                   )}
                   {/* ─────────────────────────────────────────── */}
